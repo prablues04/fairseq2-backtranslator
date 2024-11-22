@@ -62,7 +62,7 @@ class Text2TextModel:
         self.device = torch.device(device)
         print("Reached here")
         start_time = time.time()        
-        self.t2t_model = TextToTextModelPipeline(encoder=self.encoder, decoder=self.decoder, tokenizer=self.tokenizer)
+        self.t2t_model = TextToTextModelPipeline(encoder=self.encoder, decoder=self.decoder, tokenizer=self.tokenizer).to(device=self.device)
         end_time = time.time()
         print(f"Constructing t2t model took {end_time - start_time:.4f} seconds to complete.")
         print("Reached here too")
@@ -153,6 +153,8 @@ class Text2TextModel:
             predictions_intermediate = self.t2t_model.predict(sentences, source_lang=key_lang, target_lang=intermediate_lang)
             predictions = self.t2t_model.predict(predictions_intermediate, source_lang=intermediate_lang, target_lang=key_lang)
             
+            # TODO: Check exactly how encode works - if it's another forward pass, will it increase error?
+
             # 3. Create pipeline for tokenizing input/expected sentences and predicted sentences
             prediction_pipeline : Iterable = (
                 (
@@ -163,8 +165,12 @@ class Text2TextModel:
                 .bucket(batch_size)
                 .map(Collater(self.t2t_model.tokenizer.vocab_info.pad_idx))
                 .map(lambda x: extract_sequence_batch(x, self.device))
-                .map(lambda seq_batch: self.t2t_model.model.project(seq_batch.seqs, decoder_padding_mask=self.t2t_model.tokenizer))
-                .map(lambda tensor: tensor.view(-1, tensor.size(-1)))
+                .map(lambda seq_batch: (seq_batch.seqs, seq_batch.padding_mask))
+                .map(lambda tensor: self.t2t_model.model.encode(tensor[0], tensor[1]))
+                .map(lambda tensor: print(f"Tensor shape: {tensor[0].shape}") or tensor)
+                .map(lambda tensor: print(f"Tensor: {tensor[0]}") or tensor)
+                .map(lambda tensor: self.t2t_model.model.project(tensor[0], decoder_padding_mask=tensor[1]).logits.to(device=self.device))
+                .map(lambda tensor: tensor.view(-1, tensor.size(-1)).to(device=self.device))
                 .and_return()
             )
 
@@ -177,8 +183,11 @@ class Text2TextModel:
                 .bucket(batch_size)
                 .map(Collater(self.t2t_model.tokenizer.vocab_info.pad_idx))
                 .map(lambda x: extract_sequence_batch(x, self.device))
-                .map(lambda seq_batch: seq_batch.seqs)
-                .map(lambda tensor: tensor.view(-1))
+                .map(lambda seq_batch: (seq_batch.seqs, seq_batch.padding_mask))
+                .map(lambda tensor: self.t2t_model.model.encode(tensor[0], tensor[1]))
+                .map(lambda tensor: print(f"Tensor shape: {tensor[0].shape}") or tensor)
+                .map(lambda tensor: print(f"Tensor: {tensor[0]}") or tensor)
+                .map(lambda tensor: tensor[0].view(tensor[0].size(0), -1).to(device=self.device))
                 .and_return()
             )
 
