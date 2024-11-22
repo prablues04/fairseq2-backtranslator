@@ -105,10 +105,10 @@ class Text2TextModel:
 
     # TODO: Abstract function for arbitrary backtranslation depth
     # TODO: Create tests for backtranslation
-    def backtranslate(self, expected, key_lang, intermediate_lang, num_epochs=1, lr=1e-4, batch_size=40):
+    def backtranslate(self, sentences, key_lang, intermediate_lang, num_epochs=1, lr=1e-4, batch_size=40):
         """
         Train the model for backtranslation. Pytorch accumulates gradients for each layer simplifying backtranslation
-        :param expected: list of sentences in the key language
+        :param sentences: list of sentences in the key language
         :param key_lang: the key language - i.e. input-output language backtranslation is performed on
         :param intermediate_lang: the intermediate language backtranslation is performed on
         :param num_epochs: number of epochs to train the model
@@ -123,85 +123,103 @@ class Text2TextModel:
         optimizer = torch.optim.Adam(self.t2t_model.parameters(), lr=lr)
         loss_fn = torch.nn.CrossEntropyLoss()
 
-        # define number of batches
-        num_batches = ceil(len(expected) / batch_size)
-
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch}")
             
-            for i in range(num_batches):
-                # Prepare batch
-                start_idx = i * batch_size
-                end_idx = min((i + 1) * batch_size, len(expected))
-                batch_sentences = expected[start_idx:end_idx]
+            # TODO: Run batch training with a pipeline instead of manual batching and for loop (if this is more efficient)
 
-                # Forward pass: predict translations for the entire batch to intermediate language
-                predictions_intermediate = self.t2t_model.predict(
-                    batch_sentences, source_lang=key_lang, target_lang=intermediate_lang
+            # 1. Get encoder to tokenize the predictions and targets
+            token_encoder = self.t2t_model.tokenizer.create_encoder(lang=key_lang)
+
+            n_truncated = 0
+            def truncate(x: torch.Tensor) -> torch.Tensor:
+                if x.shape[0] > self.max_seq_len:
+                    nonlocal n_truncated
+                    n_truncated += 1
+                return x[:self.max_seq_len]
+            
+            def extract_sequence_batch(x: SequenceData, device: Device) -> SequenceBatch:
+                seqs, padding_mask = get_seqs_and_padding_mask(x)
+
+                if padding_mask is not None:
+                    padding_mask = padding_mask.to(device)
+
+                return SequenceBatch(seqs.to(device), padding_mask)
+
+            print(f"Sentences: {sentences}")
+            print(f"Type of sentences: {type(sentences[0])}")
+
+            # 2. Perform two forward passes for backtranslation
+            predictions_intermediate = self.t2t_model.predict(sentences, source_lang=key_lang, target_lang=intermediate_lang)
+            predictions = self.t2t_model.predict(predictions_intermediate, source_lang=intermediate_lang, target_lang=key_lang)
+            
+            # 3. Create pipeline for tokenizing input/expected sentences and predicted sentences
+            prediction_pipeline : Iterable = (
+                (
+                    read_sequence(predictions)
                 )
-                
-                # Forward pass: predict translations for the entire batch to target language
-                predictions = self.t2t_model.predict(
-                    predictions_intermediate, source_lang=intermediate_lang, target_lang=key_lang
+                .map(token_encoder)
+                .map(truncate)
+                .bucket(batch_size)
+                .map(Collater(self.t2t_model.tokenizer.vocab_info.pad_idx))
+                .map(lambda x: extract_sequence_batch(x, self.device))
+                .map(lambda seq_batch: self.t2t_model.model.project(seq_batch.seqs, decoder_padding_mask=self.t2t_model.tokenizer))
+                .map(lambda tensor: tensor.view(-1, tensor.size(-1)))
+                .and_return()
+            )
+
+            expected_pipeline : Iterable = (
+                (
+                    read_sequence(sentences)
                 )
+                .map(token_encoder)
+                .map(truncate)
+                .bucket(batch_size)
+                .map(Collater(self.t2t_model.tokenizer.vocab_info.pad_idx))
+                .map(lambda x: extract_sequence_batch(x, self.device))
+                .map(lambda seq_batch: seq_batch.seqs)
+                .map(lambda tensor: tensor.view(-1))
+                .and_return()
+            )
 
-                # 1. Tokenize the predictions and targets
-                token_encoder = self.t2t_model.tokenizer.create_encoder(lang=key_lang)
+            print(type(prediction_pipeline))
+            print(type(expected_pipeline))
+            print(prediction_pipeline)
+            print(expected_pipeline)
 
-                n_truncated = 0
-                def truncate(x: torch.Tensor) -> torch.Tensor:
-                    if x.shape[0] > self.max_seq_len:
-                        nonlocal n_truncated
-                        n_truncated += 1
-                    return x[:self.max_seq_len]
-                
-                def extract_sequence_batch(x: SequenceData, device: Device) -> SequenceBatch:
-                    seqs, padding_mask = get_seqs_and_padding_mask(x)
+            # self.t2t_model.model.encoder()
 
-                    if padding_mask is not None:
-                        padding_mask = padding_mask.to(device)
+            # 4. Execute the pipelines to get the tokenized predictions and expected outputs as a list of tensors representing different batches
+            # prediction tensors represent logits
+            predictions : List[torch.Tensor] = list(iter(prediction_pipeline))
+            # expected tensors represent tokenized sentences
+            expected : List[torch.Tensor] = list(iter(expected_pipeline))
+            print(type(predictions))
+            print(type(expected))
+            print(type(predictions[0]))
+            print(type(expected[0]))
+            print(predictions)
+            print(expected)
 
-                    return SequenceBatch(seqs.to(device), padding_mask)
+            assert len(predictions) == len(expected), "Number of batches for predictions and expected outputs must be equal."
+            
 
-                # Unsqueeze(0) adds a batch dimension to tensor i.e. from shape (n,) to (1, n)
-                tokenized_target_pipeline : Iterable = (
-                    (
-                        read_sequence(batch_sentences)
-                    )
-                    .map(token_encoder)
-                    .map(truncate)
-                    .map(Collater(self.t2t_model.tokenizer.vocab_info.pad_idx))
-                    .map(lambda x: extract_sequence_batch(x, self.device))
-                    .and_return()
-                )
-                tokenized_prediction_pipeline : Iterable = (
-                    (
-                        read_sequence(predictions)
-                    )
-                    .map(token_encoder)
-                    .map(truncate)
-                    .map(Collater(self.t2t_model.tokenizer.vocab_info.pad_idx))
-                    .map(lambda x: extract_sequence_batch(x, self.device))
-                    .and_return()
-                )
 
-                print(type(tokenized_target_pipeline))
-                print(type(tokenized_prediction_pipeline))
-                print(tokenized_target_pipeline)
-                print(tokenized_prediction_pipeline)
-                with open("debug_log.txt", "a") as log_file:
-                    log_file.write(f"Batch {i}:\n")
-                    log_file.write(f"Tokenized Targets: {tokenized_target_pipeline}\n")
-                    log_file.write(f"Tokenized Inputs: {tokenized_prediction_pipeline}\n")
+            # 5. Update the model for each batch
+            for i in range(len(predictions)):
+                print(f"Predictions dtype: {predictions[i].dtype}, shape: {predictions[i].shape}")
+                print(f"Expected dtype: {expected[i].dtype}, shape: {expected[i].shape}")
+                predictions[i] = predictions[i].float()
+                expected[i] = expected[i].long()
+                print(f"Batch {i}")     
 
-                tokenized_target_pipeline = torch.tensor(tokenized_target_pipeline()).to(device)
-                tokenized_prediction_pipeline = torch.tensor(tokenized_prediction_pipeline()).to(device)
-                
-                # 2. Calculate the loss and backpropagate
+                #5a. Reset the gradients (prevent accumulation)
                 optimizer.zero_grad()
-                loss_fn(tokenized_prediction_pipeline, tokenized_target_pipeline).backward()
 
-                # 4. Update the weights
+                # 5b. Calculate the loss and backpropagate
+                loss_fn(predictions[i], expected[i]).backward()
+
+                # 5c. Update the weights
                 optimizer.step()
 
         self.t2t_model.train(False)
