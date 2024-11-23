@@ -118,7 +118,7 @@ class Text2TextModel:
         # Sets model to training mode - affects dropout, batchnorm, etc.
         self.t2t_model.train(True)
 
-        loss_fn=torch.nn.CrossEntropyLoss()
+        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=self.t2t_model.tokenizer.vocab_info.pad_idx)
 
 
         # Define the optimizer - choose Adam optimizer for now
@@ -178,30 +178,53 @@ class Text2TextModel:
             embeddings, enc_padding_mask = self.t2t_model.model.encode(input_tokens, padding_mask=seq_padding_mask)
             print(f"Embeddings: {embeddings}\n")
             print(f"Embeddings shape: {embeddings.shape}\n")
+            print()
+            print(f"Padding mask: {seq_padding_mask.materialize().shape}\n")
+            empty_output = torch.full((len(sentences), self.max_seq_len,), fill_value=self.t2t_model.tokenizer.vocab_info.pad_idx, device=self.device)
+            print(f"Empty output: {empty_output}\n")
+            print(f"Empty output shape: {empty_output.shape}\n")
             predictions_intermediate, dec_padding_mask = self.t2t_model.model.decode(
-                torch.LongTensor([self.t2t_model.tokenizer.vocab_info.bos_idx]).to(device=self.device),
+                empty_output,
                 padding_mask=seq_padding_mask,
                 encoder_output=embeddings,
                 encoder_padding_mask=enc_padding_mask)
+            print(f"Predictions intermediate: {predictions_intermediate}\n")
+            print(f"Predictions intermediate shape: {predictions_intermediate.shape}\n")
+            print(f"Decoding padding mask: {dec_padding_mask.materialize().shape if dec_padding_mask else None}\n")
             
+            predictions_intermediate_logits = self.t2t_model.model.project(predictions_intermediate, decoder_padding_mask=dec_padding_mask).logits.to(device=self.device)
+            print(f"Predictions intermediate logits: {predictions_intermediate_logits}\n")
+            print(f"Predictions intermediate logits shape: {predictions_intermediate_logits.shape}\n")
+            
+            predictions_intermediate_tokenised = predictions_intermediate_logits.argmax(dim=-1)
+            print(f"Predictions intermediate tokenised: {predictions_intermediate_tokenised}\n")
+            print(f"Predictions intermediate tokenised shape: {predictions_intermediate_tokenised.shape}\n")
             # 2b. Translate back from the intermediate language representation to source language
-            embeddings_intermediate, enc_intermediate_padding_mask = self.t2t_model.model.encode(predictions_intermediate, padding_mask=dec_padding_mask)
-            predictions, _ = self.t2t_model.model.decode(
-                torch.LongTensor([self.t2t_model.tokenizer.vocab_info.bos_idx]).to(device=self.device),
+            embeddings_intermediate, enc_intermediate_padding_mask = self.t2t_model.model.encode(predictions_intermediate_tokenised, padding_mask=dec_padding_mask)
+            print(f"enc_intermediate_padding_mask: {enc_intermediate_padding_mask.materialize().shape if enc_intermediate_padding_mask else None}\n")
+            predictions, last_dec_padding_mask = self.t2t_model.model.decode(
+                empty_output,
                 padding_mask=dec_padding_mask,
                 encoder_output=embeddings_intermediate,
                 encoder_padding_mask=enc_intermediate_padding_mask)
 
             print(f"Predictions: {predictions}\n")
             print(f"Predictions shape: {predictions.shape}\n")
-            print(f"Predictions intermediate: {predictions_intermediate}\n")
             print(f"Predictions intermediate shape: {predictions_intermediate.shape}\n")
-            print(f"Embeddings intermediate: {embeddings_intermediate}\n")
             print(f"Embeddings intermediate shape: {embeddings_intermediate.shape}\n")
-            print(f"Embeddings: {embeddings}\n")
             print(f"Embeddings shape: {embeddings.shape}\n")
 
-            return None
+            pred_logits = self.t2t_model.model.project(predictions, decoder_padding_mask=last_dec_padding_mask).logits.to(device=self.device)
+            direct_loss = self.t2t_model.model.project(predictions, decoder_padding_mask=last_dec_padding_mask).compute_loss(input_tokens).to(device="cpu")
+            print(f"Predictions logits shape: {pred_logits.shape}\n")
+            optimizer.zero_grad()
+            loss = loss_fn(pred_logits.view(-1, pred_logits.size(-1)), input_tokens.view(-1))
+            print(f"Loss: {loss}\n")
+            print(f"Loss compute directly: {direct_loss}\n")
+            loss.backward()
+            optimizer.step()
+            print(f"Epoch {epoch} loss: {loss.item()}\n")
+            return "success"
 
             predictions_intermediate = self.t2t_model.predict(sentences, source_lang=key_lang, target_lang=intermediate_lang)
             self.t2t_model.train(True)
