@@ -16,7 +16,6 @@ from fairseq2.data import SequenceData
 from fairseq2.models.sequence import SequenceBatch
 from fairseq2.nn.padding import PaddingMask, get_seqs_and_padding_mask, pad_seqs
 from fairseq2.typing import Device
-import psutil
 
 device = (
     "cuda"
@@ -26,44 +25,6 @@ device = (
     else "cpu"
 )
 print(f"Using {device} device")
-
-def track_memory_usage(device='cuda'):
-    """
-    Tracks and prints memory usage for both GPU (VRAM) and system (RAM).
-    
-    Args:
-        device (str): Device to track GPU memory usage (e.g., 'cuda', 'cpu'). Defaults to 'cuda'.
-
-    Returns:
-        dict: A dictionary containing system RAM and GPU memory usage.
-    """
-    memory_info = {}
-
-    # GPU Memory (VRAM) Usage
-    if device == 'cuda' and torch.cuda.is_available():
-        memory_info['gpu_allocated_mb'] = torch.cuda.memory_allocated() / 1024**2
-        memory_info['gpu_reserved_mb'] = torch.cuda.memory_reserved() / 1024**2
-        memory_info['gpu_free_mb'] = (torch.cuda.get_device_properties(device).total_memory - torch.cuda.memory_reserved()) / 1024**2
-    else:
-        memory_info['gpu_allocated_mb'] = None
-        memory_info['gpu_reserved_mb'] = None
-        memory_info['gpu_free_mb'] = None
-
-    # System Memory (RAM) Usage
-    process = psutil.Process()
-    memory_info['ram_used_mb'] = process.memory_info().rss / 1024**2  # Resident Set Size: RAM in use by the process
-    memory_info['ram_total_mb'] = psutil.virtual_memory().total / 1024**2  # Total system RAM
-    memory_info['ram_available_mb'] = psutil.virtual_memory().available / 1024**2
-
-    # Print or Log Results
-    print(f"System RAM: {memory_info['ram_used_mb']:.2f} MB used / {memory_info['ram_total_mb']:.2f} MB total, {memory_info['ram_available_mb']:.2f} MB available")
-    if device == 'cuda' and torch.cuda.is_available():
-        print(f"GPU Memory: {memory_info['gpu_allocated_mb']:.2f} MB allocated, {memory_info['gpu_reserved_mb']:.2f} MB reserved, {memory_info['gpu_free_mb']:.2f} MB free")
-    else:
-        print("GPU Memory: Not available or not using CUDA")
-
-    return memory_info
-
 
 # Load the data
 # TODO: Replace with data loaders library
@@ -159,7 +120,7 @@ class Text2TextModel:
         # Sets model to training mode - affects dropout, batchnorm, etc.
         self.t2t_model.train(True)
 
-        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=self.t2t_model.tokenizer.vocab_info.pad_idx)
+        loss_fn = torch.nn.CrossEntropyLoss()
 
 
         # Define the optimizer - choose Adam optimizer for now
@@ -190,8 +151,8 @@ class Text2TextModel:
             (
                 read_sequence(sentences)
             )
-            .map(lambda x: token_encoder(x).to(device=self.device))
-            .map(lambda x: truncate(x).to(device=self.device))
+            .map(lambda x: token_encoder(x).to(device=self.device).detach())
+            .map(lambda x: truncate(x).to(device=self.device).detach())
             .and_return()
         )
         input_tokens_list : List[torch.Tensor] = list(iter(generate_tokens))
@@ -202,11 +163,24 @@ class Text2TextModel:
         input_tokens, _ = pad_seqs(input_tokens_list, pad_value=self.t2t_model.tokenizer.vocab_info.pad_idx, pad_to_multiple=self.max_seq_len)
         print(f"Input tokens shape after concatenation: {input_tokens.shape}")
 
-        track_memory_usage(device=self.device)
-
         # Repeat for multiple epochs
         for epoch in range(num_epochs):
-            print(f"Epoch: {epoch}")
+            print(f"Epoch: {epoch + 1}")
+            if epoch == 0 or epoch == num_epochs - 1 or epoch % 10 == 0:
+                self.t2t_model.train(False)
+                intermediate = self.t2t_model.predict(sentences, source_lang=key_lang, target_lang=intermediate_lang)
+                print(f"Intermediate: {intermediate}")
+                output = self.t2t_model.predict(intermediate, source_lang=intermediate_lang, target_lang=key_lang)
+                print(f"Output: {output}")
+                self.t2t_model.train(True)
+                with open("translations.txt", "a") as f:
+                    f.write(f"Epoch {epoch + 1}\n")
+                    f.write(f"Sentences: \n{sentences}\n")
+                    f.write(f"Intermediate: \n{intermediate}\n")
+                    f.write(f"Output: \n{output}\n")
+                    f.write("\n")
+
+                # print the backtranslated output
             
             # TODO: Run batch training with a pipeline instead of manual batching and for loop (if this is more efficient)
             # 1. Get encoder to tokenize the predictions and targets
@@ -222,7 +196,7 @@ class Text2TextModel:
             # print(f"Embeddings shape: {embeddings.shape}\n")
             # print()
             # print(f"Padding mask: {seq_padding_mask.materialize().shape}\n")
-            empty_output = torch.full((len(sentences), self.max_seq_len,), fill_value=self.t2t_model.tokenizer.vocab_info.pad_idx, device=self.device)
+            empty_output = torch.full((len(sentences), self.max_seq_len,), fill_value=self.t2t_model.tokenizer.vocab_info.eos_idx, device=self.device)
             # print(f"Empty output: {empty_output}\n")
             # print(f"Empty output shape: {empty_output.shape}\n")
             predictions_intermediate, dec_padding_mask = self.t2t_model.model.decode(
@@ -250,9 +224,8 @@ class Text2TextModel:
                 padding_mask=dec_padding_mask,
                 encoder_output=embeddings_intermediate.detach(),
                 encoder_padding_mask=enc_intermediate_padding_mask)
-            track_memory_usage(device=self.device)
             # print(f"Predictions: {predictions}\n")
-            print(f"Predictions shape: {predictions.shape}\n")
+            # print(f"Predictions shape: {predictions.shape}\n")
             # print(f"Predictions intermediate shape: {predictions_intermediate.shape}\n")
             # print(f"Embeddings intermediate shape: {embeddings_intermediate.shape}\n")
             # print(f"Embeddings shape: {embeddings.shape}\n")
@@ -260,9 +233,9 @@ class Text2TextModel:
             del embeddings, enc_padding_mask, predictions_intermediate, dec_padding_mask, predictions_intermediate_logits
             del predictions_intermediate_tokenised, embeddings_intermediate, enc_intermediate_padding_mask, empty_output
             torch.cuda.empty_cache()
-            track_memory_usage(device=self.device)
             pred_logits = self.t2t_model.model.project(predictions.detach(), decoder_padding_mask=last_dec_padding_mask).logits.to(device=self.device)
             print("done with logits")
+
             # direct_loss = self.t2t_model.model.project(predictions, decoder_padding_mask=last_dec_padding_mask).compute_loss(input_tokens).to(device="cpu")
             # print(f"Direct loss: {direct_loss}\n")
             # print(f"Direct loss shape: {direct_loss.shape}\n")
@@ -271,19 +244,16 @@ class Text2TextModel:
             optimizer.zero_grad()
             loss = loss_fn(pred_logits.view(-1, pred_logits.size(-1)), input_tokens.view(-1))
             print(f"Loss: {loss}\n")
-            print(f"Loss item: {loss.item()}\n")
-            track_memory_usage(device=self.device)
+            # print(f"Loss item: {loss.item()}\n")
             pred_logits.detach()
             del pred_logits, predictions, last_dec_padding_mask
             torch.cuda.empty_cache()
-            track_memory_usage(device=self.device)
             # print(f"Loss compute directly: {direct_loss}\n")
             loss.backward()
-            track_memory_usage(device=self.device)
             optimizer.step()
             loss.detach()
             
-            print(f"Epoch {epoch} loss: {loss.item()}\n")
+            print(f"Epoch {epoch+1} loss: {loss.item()}\n")
 
             """
 
@@ -406,13 +376,35 @@ class Text2TextModel:
 
 if __name__ == "__main__":
     data = pd.read_csv(os.path.join(os.path.dirname(__file__), "test-sentences-200K.csv"))[:2]
+    data = pd.DataFrame({"sentences": [
+        "It's raining cats and dogs outside, so take an umbrella.",
+        "Don't cry over spilled milk; what's done is done.",
+        # "The bank will keep the money safe, but which bank do you mean?",
+        # "The chicken is ready to eat.",
+        "He really hit it out of the park with that presentation.",
+        # "She’s as cool as a cucumber, even under pressure.",
+        # "The book, which was lying on the table that I had just cleaned, turned out to be the one I had been searching for all week.",
+        # "While I was walking to the store, I realized that I had forgotten my wallet, which meant I had to walk all the way back home to get it before continuing.",
+        # "The matter is being handled with the utmost urgency by the authorities.",
+        # "The solution to the problem, which had eluded the team for months, was finally discovered accidentally by a graduate student.",
+        # "Time flies like an arrow; fruit flies like a banana.",
+        # "A bicycle can’t stand on its own because it’s two-tired.",
+        "Quantum entanglement suggests that particles remain interconnected even when separated by vast distances.",
+        # "The herpetologist carefully documented the behavior of the newly discovered species of salamander.",
+        "I’m totally pumped for the party—it’s gonna be lit!",
+        "That movie was a real tearjerker; I was bawling by the end.",
+        # "The doctor finished their shift and went home to rest.",
+        # "Everyone should bring their own lunch to the picnic tomorrow.",
+        # "Hope is the thing with feathers that perches in the soul.",
+        # "Life is not a problem to be solved, but a reality to be experienced."
+    ]})
     print(data)
     data = data.values.flatten().tolist()
     model = Text2TextModel(encoder='text_sonar_basic_encoder', decoder='text_sonar_basic_decoder', tokenizer='text_sonar_basic_encoder', device=device, max_seq_len=100)
     # translations = pd.DataFrame({"translations":model.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
     # print(translations)
 
-    model.backtranslate(data, key_lang="tel_Telu", intermediate_lang="eng_Latn", num_epochs=10, lr=0.001, batch_size=2)
+    model.backtranslate(data, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=50, lr=0.005, batch_size=2)
     translations = pd.DataFrame({"translations":model.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
     print(translations)
 
