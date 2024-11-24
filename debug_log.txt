@@ -1,0 +1,67 @@
+Using cuda device
+                                           sentences
+0  హత్యానంతరం అస్గర్‌అలీ. . శర్మను అదే వాహనంపై ఎక...
+1  విద్యార్థులకు మహానీయుల జీవితాలు, చరిత్ర, సంస్క...
+Reached here
+Constructing t2t model took 29.5829 seconds to complete.
+Reached here too
+Epoch: 0
+Sentences: ['హత్యానంతరం అస్గర్\u200cఅలీ. . శర్మను అదే వాహనంపై ఎక్కించుకుని సాగర్\u200cరోడ్ మీదుగా నల్లగొండ చేరుకున్నారు.', 'విద్యార్థులకు మహానీయుల జీవితాలు, చరిత్ర, సంస్కృతిని, విస్తృతమైన విజ్ఞానాన్ని అందించే పుస్తకాలను పరిచయం చేయాలని దిశానిర్దేశం చేశారు.']
+Type of sentences: <class 'str'>
+<class 'fairseq2.data.data_pipeline.DataPipeline'>
+<class 'fairseq2.data.data_pipeline.DataPipeline'>
+<fairseq2.data.data_pipeline.DataPipeline object at 0x7f5d65045a30>
+<fairseq2.data.data_pipeline.DataPipeline object at 0x7f5d4d4767f0>
+
+Seq batch: SequenceBatch(seqs=tensor([[256172,  14149,  35258, 169445,  53853, 248079,   1294,   1978, 248776,
+           2094,   1294,  39442,  11496,  88134,   1624,  54637,  11721, 249526,
+          15781,  39968,   8855, 248776,  14752,  40652,   2183,  14265, 248776,
+           2094,  20218,  12364,  39968,   4302,   7755,  68612,  91015, 248075,
+              3],
+        [256172,    982,  29798,  14595, 248635, 141720, 125798, 248079, 155335,
+         248079, 239318, 163778,  26509,  98847,  98577,  15504,   2094,  32124,
+          35204, 248079, 112815, 250414,  74965, 127491, 248320, 107131, 110048,
+          35204, 125131, 172574, 160432,  56605, 248075,      3,      0,      0,
+              0]], device='cuda:0'), padding_mask=<fairseq2.nn.padding.PaddingMask object at 0x7f5d4d4759d0>, example=None)
+Seq batch seqs shape: torch.Size([2, 37])
+
+
+Tensor shape: torch.Size([2, 1, 1024])
+Tensor: tensor([[[ 0.0017, -0.0005,  0.0151,  ...,  0.0008,  0.0032, -0.0016]],
+
+        [[ 0.0011, -0.0108, -0.0034,  ..., -0.0017, -0.0021, -0.0035]]],
+       device='cuda:0', grad_fn=<UnsqueezeBackward0>)
+
+
+Seq batch: SequenceBatch(seqs=tensor([[256172,  14149, 199685, 248325, 226311,   1294,   1978, 248776,   2094,
+           1294,  39442, 248075,     81,  11496,  88134,   1624,  54637,  11721,
+         249526,  15781,  30287,   4484, 138275,  39324, 189405,  14265, 248776,
+           2094,  20218,  12364,   3897,   5819,   2846,   2690,  17019, 106373,
+           6784,   4306,  78899,  16755, 248075,      3],
+        [256172, 125131, 172574,    982,  29798,  12078, 217127,  74059,   7756,
+         248079, 155335, 248079, 239318, 250414,  89833, 248079, 112815, 250414,
+          74965,   5105,  88812, 248320, 107131, 110048, 248662,  98847, 248402,
+          18349, 193351,  13451, 208100,  65504, 249411,   4908,   2094,  46025,
+         248382,  91015, 248075,      3,      0,      0]], device='cuda:0'), padding_mask=<fairseq2.nn.padding.PaddingMask object at 0x7f5d4d474bd0>, example=None)
+Seq batch seqs shape: torch.Size([2, 42])
+
+
+Tensor shape: torch.Size([2, 1, 1024])
+Tensor: tensor([[[-0.0013, -0.0025,  0.0028,  ..., -0.0015,  0.0050, -0.0017]],
+
+        [[ 0.0002, -0.0103,  0.0001,  ..., -0.0024,  0.0015, -0.0010]]],
+       device='cuda:0', grad_fn=<UnsqueezeBackward0>)
+
+<class 'list'>
+<class 'list'>
+<class 'torch.Tensor'>
+<class 'torch.Tensor'>
+[tensor([[ 0.0080,  0.0297,  0.0150,  ...,  0.0006, -0.0779,  0.1446],
+        [ 0.0003,  0.0132, -0.0264,  ...,  0.1164,  0.0694,  0.1072]],
+       device='cuda:0', grad_fn=<ViewBackward0>)]
+[tensor([[-0.0013, -0.0025,  0.0028,  ..., -0.0015,  0.0050, -0.0017],
+        [ 0.0002, -0.0103,  0.0001,  ..., -0.0024,  0.0015, -0.0010]],
+       device='cuda:0', grad_fn=<ViewBackward0>)]
+Predictions dtype: torch.float32, shape: torch.Size([2, 256206])
+Expected dtype: torch.float32, shape: torch.Size([2, 1024])
+Batch 0
