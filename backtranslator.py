@@ -105,12 +105,13 @@ class Backtranslator:
         
         token_encoder = self.t2t_model.tokenizer.create_encoder(lang=key_lang)
         num_batches = ceil(len(sentences) / batch_size)
+        assert num_batches > 0, "Number of batches must be greater than 0"
 
+        # Store initial train/validation losses before training starts
         if validation_sentences:
             validation_loss = self.compute_validation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
-            validation_losses.append((-1, validation_loss))
-            # Store validation loss for epoch -1. i.e. before training starts train loss = validation loss
-            train_losses.append((-1, validation_loss[0])) 
+            validation_losses.append(validation_loss)
+            train_losses.append(validation_loss) # assume init train_loss is the same as validation_loss for now 
 
         # Repeat for multiple epochs
         for epoch in range(num_epochs):
@@ -146,7 +147,7 @@ class Backtranslator:
                     else:
                         self.t2t_model.eval()
 
-                    with open("debuglog.txt", "w") as f:
+                    with open("debuglog.txt", "a") as f:
                         f.write(f"Epoch {epoch + 1}\n")
                         f.write(f"Sentences: \n{sentences}\n")
                         f.write(f"Intermediate: \n{intermediate}\n")
@@ -210,7 +211,7 @@ class Backtranslator:
                 time.sleep(3.)
 
             # for the final batch in the epoch, calculate the validation loss
-            if validation_sentences and batch_idx == num_batches - 1 and (epoch + 1) % 5 == 0:
+            if validation_sentences and batch_idx == num_batches - 1:
                 validation_loss = self.compute_validation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
                 validation_losses.append(validation_loss)
             
@@ -220,12 +221,10 @@ class Backtranslator:
             # Cool down the CPU and GPU!
             time.sleep(3.)
             
-        average_losses = [0] * num_epochs
-        for key, value in train_losses.items():
-            average_losses[key] = sum(value) / len(value)
-
         self.t2t_model.eval()
-        return average_losses, validation_losses
+        if validation_sentences:
+            assert len(train_losses) == len(validation_losses), "Train and validation losses must be the same length"
+        return train_losses, validation_losses
 
 class TranslationQualifier:
     @staticmethod
