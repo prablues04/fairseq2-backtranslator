@@ -3,7 +3,7 @@ from sonar.inference_pipelines.text import EmbeddingToTextModelPipeline
 from sonar.inference_pipelines.text import TextToTextModelPipeline
 import pandas as pd
 import torch
-from math import ceil
+from math import ceil, floor
 import time
 from fairseq2.models.sequence import SequenceBatch
 from fairseq2.data.data_pipeline import read_sequence
@@ -51,8 +51,17 @@ class Backtranslator:
         """
         return self.t2t_model.predict(data, source_lang=source_lang, target_lang=target_lang, progress_bar=True)
     
-    def compute_backtranslation_loss(self, sentences, key_lang, intermediate_lang, batch_size=5):
-        return self.backtranslate(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)
+    def compute_validation_loss(self, sentences, key_lang, intermediate_lang, batch_size=5) -> float:
+        """
+        :param sentences: list of sentences in the key language
+        :param key_lang: the key language - i.e. input-output language backtranslation is performed on
+        :param intermediate_lang: the intermediate language backtranslation is performed on
+        :param batch_size
+        Compute the validation loss for the model - this does not perform gradient updates
+
+        :return: validation loss for the model
+        """
+        return self.backtranslate(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)[0][0]
     
 
     # TODO: Abstract function for arbitrary backtranslation depth
@@ -77,7 +86,7 @@ class Backtranslator:
         loss_fn = torch.nn.CrossEntropyLoss()
         
         # Store losses for plotting
-        losses = {}
+        train_losses = []
         validation_losses = []
 
         # Define the optimizer - choose Adam optimizer for now
@@ -98,12 +107,15 @@ class Backtranslator:
         num_batches = ceil(len(sentences) / batch_size)
 
         if validation_sentences:
-            validation_loss, _ = self.compute_backtranslation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
-            validation_losses.append((-1, validation_loss[0]))
+            validation_loss = self.compute_validation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
+            validation_losses.append((-1, validation_loss))
+            # Store validation loss for epoch -1. i.e. before training starts train loss = validation loss
+            train_losses.append((-1, validation_loss[0])) 
 
         # Repeat for multiple epochs
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch + 1}")
+            epoch_loss = 0
             for batch_idx in range(num_batches):
                 
                 start_idx = batch_idx * batch_size
@@ -180,10 +192,7 @@ class Backtranslator:
 
                 loss = loss_fn(pred_logits.view(-1, pred_logits.size(-1)), input_tokens.view(-1))
                 print(f"Loss: {loss}\n")
-                if epoch in losses:
-                    losses[epoch].append(loss.item())
-                else:
-                    losses[epoch] = [loss.item()]
+                epoch_loss += loss.item()
                 pred_logits.detach()
                 del pred_logits, predictions, last_dec_padding_mask
                 torch.cuda.empty_cache()
@@ -200,22 +209,66 @@ class Backtranslator:
                 # Cool down the CPU and GPU!
                 time.sleep(3.)
 
+            # for the final batch in the epoch, calculate the validation loss
             if validation_sentences and batch_idx == num_batches - 1 and (epoch + 1) % 5 == 0:
-                validation_loss, _ = self.compute_backtranslation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
-                validation_losses.append(validation_loss[0])
+                validation_loss = self.compute_validation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
+                validation_losses.append(validation_loss)
             
+            # Store the average train loss for the epoch
+            train_losses.append(epoch_loss / num_batches)
+
             # Cool down the CPU and GPU!
             time.sleep(3.)
             
         average_losses = [0] * num_epochs
-        for key, value in losses.items():
+        for key, value in train_losses.items():
             average_losses[key] = sum(value) / len(value)
 
         self.t2t_model.eval()
         return average_losses, validation_losses
 
+class TranslationQualifier:
+    @staticmethod
+    def _compute_spbleu(source_sentences, bt_sentences) -> float:
+        """
+        :param source_sentences: list of source sentences
+        :param bt_sentences: list of backtranslated sentences
 
+        :return: quality score for the backtranslated sentences
+        """
+        pass
 
+    @staticmethod
+    def _compute_xsim(source_embeddings, target_embeddings) -> pd.DataFrame:
+        """
+        :param source_embeddings: list of source embeddings
+        :param bt_embeddings: list of backtranslated embeddings
+
+        :return: quality score for the backtranslated sentences
+        """
+        from sklearn.metrics.pairwise import cosine_similarity
+        src_tgt_cos_similarity = cosine_similarity(source_embeddings, target_embeddings)
+        return pd.DataFrame(src_tgt_cos_similarity)
+
+    @staticmethod
+    def compute_bleu(self, source_sentences, bt_sentences, tokenizer) -> float:
+        """
+        :param source_sentences: list of source sentences
+        :param bt_sentences: list of backtranslated sentences
+
+        :return: quality score for the backtranslated sentences
+        """
+        import sacrebleu
+        return sacrebleu.corpus_bleu(bt_sentences, [source_sentences], tokenize=tokenizer).score
+
+    def _compute_comet(self, source_sentences, bt_sentences) -> float:
+        """
+        :param source_sentences: list of source sentences
+        :param bt_sentences: list of backtranslated sentences
+
+        :return: quality score for the backtranslated sentences
+        """
+        pass
 
 if __name__ == "__main__":
     # data = pd.read_csv(os.path.join(os.path.dirname(__file__), "test-sentences-200K.csv"))[:2]
@@ -272,8 +325,8 @@ if __name__ == "__main__":
         "The quick brown fox jumps over the lazy dog, which was lying on the grass, basking in the warm sunlight, completely oblivious to the world around it, while the fox, with its sleek and agile body, effortlessly leaped over it, continuing its journey through the dense forest."
     ]})
     print(data)
-    data = data[:5]
     data = data.sample(frac=1).reset_index(drop=True)
+    data = data[:8]
     train, test = data[:int(0.8*len(data))].values.flatten().tolist(), data[int(0.8*len(data)):].values.flatten().tolist()
     print(train)
     print(test)
@@ -282,13 +335,13 @@ if __name__ == "__main__":
     # translations = pd.DataFrame({"translations":model.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
     # print(translations)
 
-    train_losses, validation_losses = model.backtranslate(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=2, lr=0.01, batch_size=5, validation_sentences=test)
+    train_losses, validation_losses = model.backtranslate(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=5, lr=0.02, batch_size=3, validation_sentences=test)
     print(f"Train losses: {train_losses}")
     print(f"Validation losses: {validation_losses}")
     # Export epoch losses to a separate file
-    # losses_df = pd.DataFrame({"validation_losses": validation_losses, "train_losses": train_losses})
-    # print(losses_df)
-    # losses_df.to_csv("epoch_losses.csv", index=True)
+    losses_df = pd.DataFrame({"validation_losses": validation_losses, "train_losses": train_losses})
+    print(losses_df)
+    losses_df.to_csv("epoch_losses.csv", index=True)
     # translations = pd.DataFrame({"translations":model.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
     # print(translations)
 
