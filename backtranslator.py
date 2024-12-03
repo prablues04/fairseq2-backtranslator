@@ -63,6 +63,32 @@ class Backtranslator:
         """
         return self.backtranslate(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)[0][0]
     
+    def generate_forward_pass_logits(self, input_tokens, seq_padding_mask, batch_size) -> tuple[torch.Tensor, PaddingMask]:
+        """
+        Generate intermediate tokens from the input tokens
+        :param input_tokens: input tokens
+        :param padding_mask: padding mask for input tokens
+        
+        :return: tokens for intermediate language in backtranslation
+        """
+        # Generate embeddings for source tokens
+        embeddings, enc_padding_mask = self.t2t_model.model.encode(input_tokens, padding_mask=seq_padding_mask)
+        
+        # Create empty output tensor for intermediate tokens, filled with padding tokens
+        empty_output = torch.full((batch_size, self.max_seq_len,), fill_value=self.t2t_model.tokenizer.vocab_info.pad_idx, device=self.device)
+        # Fill first column with beginning of sentence token
+        empty_output[:, 0] = self.t2t_model.tokenizer.vocab_info.bos_idx
+
+        # Generate intermediate representations and convert to logits
+        predictions_intermediate, dec_padding_mask = self.t2t_model.model.decode(
+            empty_output,
+            padding_mask=seq_padding_mask,
+            encoder_output=embeddings.detach(),
+            encoder_padding_mask=enc_padding_mask)
+        predictions_intermediate_logits = self.t2t_model.model.project(predictions_intermediate.detach(), decoder_padding_mask=dec_padding_mask).logits.to(device=self.device)
+        
+        return predictions_intermediate_logits, dec_padding_mask
+
 
     # TODO: Abstract function for arbitrary backtranslation depth
     # TODO: Create tests for backtranslation
@@ -155,38 +181,23 @@ class Backtranslator:
                         f.write("\n")
 
                 # TODO: Run batch training with a pipeline instead of manual batching and for loop (if this is more efficient)
-                # 2a. Translate to intermediate language representation
-                embeddings, enc_padding_mask = self.t2t_model.model.encode(input_tokens, padding_mask=seq_padding_mask)
-                empty_output = torch.full((this_batch_size, self.max_seq_len,), fill_value=self.t2t_model.tokenizer.vocab_info.pad_idx, device=self.device)
-                empty_output[:, 0] = self.t2t_model.tokenizer.vocab_info.bos_idx
-                predictions_intermediate, dec_padding_mask = self.t2t_model.model.decode(
-                    empty_output,
-                    padding_mask=seq_padding_mask,
-                    encoder_output=embeddings.detach(),
-                    encoder_padding_mask=enc_padding_mask)
                 
-                predictions_intermediate_logits = self.t2t_model.model.project(predictions_intermediate.detach(), decoder_padding_mask=dec_padding_mask).logits.to(device=self.device)
+                # 2a. Translate to intermediate language representation
+                predictions_intermediate_logits, dec_padding_mask = self.generate_forward_pass_logits(input_tokens, seq_padding_mask, this_batch_size)
+
+                # Derive tokenised intermediate representations from logits
                 predictions_intermediate_tokenised = predictions_intermediate_logits.argmax(dim=-1)
                 predictions_intermediate_logits.detach()
 
                 # 2b. Translate back from the intermediate language representation to source language
-                embeddings_intermediate, enc_intermediate_padding_mask = self.t2t_model.model.encode(predictions_intermediate_tokenised.detach(), padding_mask=dec_padding_mask)
-                predictions, last_dec_padding_mask = self.t2t_model.model.decode(
-                    empty_output,
-                    padding_mask=dec_padding_mask,
-                    encoder_output=embeddings_intermediate.detach(),
-                    encoder_padding_mask=enc_intermediate_padding_mask)
+                pred_logits, last_dec_padding_mask = self.generate_forward_pass_logits(predictions_intermediate_tokenised.detach(), dec_padding_mask, this_batch_size)
 
                 # Cool down the CPU and GPU! (Not essential, but I like having a functioning laptop)
                 time.sleep(2.)
 
                 # Clear unneeded tensors
-                del embeddings, enc_padding_mask, predictions_intermediate, dec_padding_mask, predictions_intermediate_logits
-                del predictions_intermediate_tokenised, embeddings_intermediate, enc_intermediate_padding_mask, empty_output
+                del predictions_intermediate_tokenised, predictions_intermediate_logits, dec_padding_mask
                 torch.cuda.empty_cache()
-
-                # Obtain logits for back-translated predictions
-                pred_logits = self.t2t_model.model.project(predictions.detach(), decoder_padding_mask=last_dec_padding_mask).logits.to(device=self.device)
 
                 if training:
                     optimizer.zero_grad()
@@ -195,7 +206,7 @@ class Backtranslator:
                 print(f"Loss: {loss}\n")
                 epoch_loss += loss.item()
                 pred_logits.detach()
-                del pred_logits, predictions, last_dec_padding_mask
+                del pred_logits, last_dec_padding_mask
                 torch.cuda.empty_cache()
 
                 if training:
