@@ -219,8 +219,6 @@ class Backtranslator():
                 time.sleep(2.)
 
                 # Clear unneeded tensors
-                # del predictions_intermediate_tokenised, predictions_intermediate_logits, dec_padding_mask
-                # torch.cuda.empty_cache()
 
                 if training:
                     optimizer.zero_grad()
@@ -231,8 +229,6 @@ class Backtranslator():
                 print(f"Loss: {loss}\n")
                 epoch_loss += loss.item() * this_batch_size
                 pred_logits.detach()
-                # del pred_logits, last_dec_padding_mask
-                # torch.cuda.empty_cache()
 
                 if training:
                     # print(f"Loss compute directly: {direct_loss}\n")
@@ -240,8 +236,6 @@ class Backtranslator():
                     optimizer.step()
 
                 loss.detach()
-                # del loss
-                # torch.cuda.empty_cache()
                 
                 # Cool down the CPU and GPU!
                 time.sleep(3.)
