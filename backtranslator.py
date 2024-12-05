@@ -1,46 +1,28 @@
-from sonar.inference_pipelines.text import TextToEmbeddingModelPipeline
-from sonar.inference_pipelines.text import EmbeddingToTextModelPipeline
 from sonar.inference_pipelines.text import TextToTextModelPipeline
 import pandas as pd
 import torch
-from math import ceil, floor
+from math import ceil
 import time
 from fairseq2.models.sequence import SequenceBatch
 from fairseq2.data.data_pipeline import read_sequence
-import os
-from fairseq2.data import Collater
 from datasets import load_dataset
 # TODO: Understand benefits of typing library as opposed to collections
-from typing import Iterable, Sequence, List
-from fairseq2.data import SequenceData
-from fairseq2.models.sequence import SequenceBatch
+from typing import Iterable, List
 from fairseq2.nn.padding import PaddingMask, pad_seqs
-import numpy.random as npr
-
-device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
+from sonar.models.sonar_text import (
+    load_sonar_text_decoder_model,
+    load_sonar_text_encoder_model,
+    load_sonar_tokenizer
 )
-print(f"Using {device} device")
 
 class Backtranslator:
-    def __init__(self, encoder, decoder, tokenizer, max_seq_len=512, device="cpu"):
-        # encoder, decoder, tokenizer are strings representing respective names used to initiailise pipelines
-        
-        self.encoder_name = encoder
-        self.decoder_name = decoder
-        self.tokenizer_name = tokenizer
+    def __init__(self, t2tpipeline, max_seq_len=512, device="cuda" if torch.cuda.is_available() else "cpu") :
         self.max_seq_len = max_seq_len
         self.device = torch.device(device)
-
-        start_time = time.time()        
-        self.t2t_model = TextToTextModelPipeline(encoder=self.encoder_name, decoder=self.decoder_name, tokenizer=self.tokenizer_name).to(device=self.device)
-        end_time = time.time()
-
-        print(f"Constructing t2t model took {end_time - start_time:.4f} seconds to complete.")
+        self.t2t_model = t2tpipeline
+        self.time_metrics = {
+            "epoch_times": [],
+        }
 
     def predict(self, data, source_lang, target_lang):
         """
@@ -143,6 +125,9 @@ class Backtranslator:
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch + 1}")
             epoch_loss = 0
+
+            start_time = time.time()
+            
             for batch_idx in range(num_batches):
                 
                 start_idx = batch_idx * batch_size
@@ -232,6 +217,9 @@ class Backtranslator:
             # Cool down the CPU and GPU!
             time.sleep(3.)
             
+            # Store the time taken for the epoch
+            self.time_metrics["epoch_times"].append(time.time() - start_time)
+
         self.t2t_model.eval()
         if validation_sentences:
             assert len(train_losses) == len(validation_losses), "Train and validation losses must be the same length"
@@ -239,10 +227,10 @@ class Backtranslator:
 
 class TranslationQualifier:
     @staticmethod
-    def _compute_spbleu(source_sentences, bt_sentences) -> float:
+    def _compute_spbleu(source_sentences, target_sentences) -> float:
         """
         :param source_sentences: list of source sentences
-        :param bt_sentences: list of backtranslated sentences
+        :param target_sentences: list of backtranslated sentences
 
         :return: quality score for the backtranslated sentences
         """
@@ -261,26 +249,34 @@ class TranslationQualifier:
         return pd.DataFrame(src_tgt_cos_similarity)
 
     @staticmethod
-    def compute_bleu(self, source_sentences, bt_sentences, tokenizer) -> float:
+    def compute_bleu(source_sentences, target_sentences, tokenizer) -> float:
         """
         :param source_sentences: list of source sentences
-        :param bt_sentences: list of backtranslated sentences
+        :param target_sentences: list of backtranslated sentences
 
         :return: quality score for the backtranslated sentences
         """
         import sacrebleu
-        return sacrebleu.corpus_bleu(bt_sentences, [source_sentences], tokenize=tokenizer).score
+        return sacrebleu.corpus_bleu(target_sentences, [source_sentences], tokenize=tokenizer).score
 
-    def _compute_comet(self, source_sentences, bt_sentences) -> float:
+    def _compute_comet(source_sentences, target_sentences) -> float:
         """
         :param source_sentences: list of source sentences
-        :param bt_sentences: list of backtranslated sentences
+        :param target_sentences: list of backtranslated sentences
 
         :return: quality score for the backtranslated sentences
         """
         pass
 
 if __name__ == "__main__":
+
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
+    print(f"Using {device} device")
+
     # data = pd.read_csv(os.path.join(os.path.dirname(__file__), "test-sentences-200K.csv"))[:2]
     data = pd.DataFrame({"sentences": [
         "It's raining cats and dogs outside, so take an umbrella.",
@@ -341,21 +337,23 @@ if __name__ == "__main__":
     print(train)
     print(test)
     data = data.values.flatten().tolist()
-    model = Backtranslator(encoder='text_sonar_basic_encoder', decoder='text_sonar_basic_decoder', tokenizer='text_sonar_basic_encoder', device=device, max_seq_len=100)
-    # translations = pd.DataFrame({"translations":model.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
+
+    # Load the encoder, decoder, and tokenizer and initialise model
+    encoder = load_sonar_text_encoder_model("text_sonar_basic_encoder", progress=True, device=device)
+    decoder = load_sonar_text_decoder_model("text_sonar_basic_decoder", progress=True, device=device)
+    tokenizer = load_sonar_tokenizer("text_sonar_basic_encoder", progress=True)
+    t2tpipeline = TextToTextModelPipeline(encoder=encoder, decoder=decoder, tokenizer=tokenizer).to(device=device)
+    backtranslator = Backtranslator(t2tpipeline=t2tpipeline, device=device, max_seq_len=100)
+    # translations = pd.DataFrame({"translations":backtranslator.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
     # print(translations)
 
-    train_losses, validation_losses = model.backtranslate(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=5, lr=0.02, batch_size=3, validation_sentences=test)
+    train_losses, validation_losses = backtranslator.backtranslate(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=5, lr=0.02, batch_size=3, validation_sentences=test)
     print(f"Train losses: {train_losses}")
     print(f"Validation losses: {validation_losses}")
     # Export epoch losses to a separate file
     losses_df = pd.DataFrame({"validation_losses": validation_losses, "train_losses": train_losses})
     print(losses_df)
     losses_df.to_csv("epoch_losses.csv", index=True)
-    # translations = pd.DataFrame({"translations":model.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
+    # translations = pd.DataFrame({"translations":backtranslator.predict(data, source_lang="tel_Telu", target_lang="eng_Latn")})
     # print(translations)
-
-def evaluate_bleu(model: Backtranslator, ):
-    pass
-
     
