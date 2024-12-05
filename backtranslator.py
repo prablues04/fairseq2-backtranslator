@@ -98,17 +98,23 @@ class Backtranslator():
     # TODO: Replace loop and calculations with streams for memory efficiency
     def perform_backtranslation_training(self, sentences: List[str], key_lang: str, intermediate_lang: str, 
                                          training : bool, num_epochs : int = 1, lr : float = 0.005, 
-                                         batch_size : int = 5, validation_sentences : List[str] = None) -> dict:
+                                         batch_size : int = 5, validation_sentences : List[str] = None, 
+                                         save_model_name : str = None) -> Information:
         """
         Train the model for backtranslation. Pytorch accumulates gradients for each layer simplifying backtranslation
         :param sentences: list of sentences in the key language
         :param key_lang: the key language - i.e. input-output language backtranslation is performed on
         :param intermediate_lang: the intermediate language backtranslation is performed on
+        :param training: boolean flag to indicate if model is in training mode
+            - turned off for testing/validation/computing individual loss without gradient update
         :param num_epochs: number of epochs to train the model
         :param lr: learning rate
         :param batch_size
+        :param validation_sentences: list of validation sentences
+        :param save_model_name: name of the model to save after training (excluding ".pth" suffix). If no
+            name is provided, the model is not saved
 
-        :return: train_losses, validation_losses
+        :return: Information object containing training, validation losses and time per epoch
         """
 
         assert len(sentences) > 0, "Sentences must be provided for backtranslation"
@@ -286,5 +292,6 @@ class Backtranslator():
             print(f"Length of train losses: {len(information.train_losses)}\n")
             assert len(information.train_losses) == len(information.validation_losses), "Train and validation losses must be the same length"
         
-        torch.save(self.t2t_model.state_dict(), "backtranslate_model.pth")
+        if save_model_name:
+            torch.save(self.t2t_model.state_dict(), save_model_name + ".pth")
         return information
