@@ -35,7 +35,7 @@ class Backtranslator:
 
         :return: validation loss for the model
         """
-        return self.backtranslate(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)[0][0]
+        return self.perform_backtranslation_training(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)[0][0]
     
     def generate_forward_pass_logits(self, input_tokens, seq_padding_mask, batch_size) -> tuple[torch.Tensor, PaddingMask]:
         """
@@ -83,7 +83,9 @@ class Backtranslator:
     # TODO: Abstract function for arbitrary backtranslation depth
     # TODO: Create tests for backtranslation
     # TODO: Replace loop and calculations with streams for memory efficiency
-    def backtranslate(self, sentences: List[str], key_lang: str, intermediate_lang: str, num_epochs : int = 1, lr : float = 0.005, batch_size : int = 5, validation_sentences : List[str] = None, training : bool =True) -> tuple[list[float], list[float]]:
+    def perform_backtranslation_training(self, sentences: List[str], key_lang: str, intermediate_lang: str, 
+                                         num_epochs : int = 1, lr : float = 0.005, batch_size : int = 5, 
+                                         validation_sentences : List[str] = None, training : bool = True) -> tuple[list[float], list[float]]:
         """
         Train the model for backtranslation. Pytorch accumulates gradients for each layer simplifying backtranslation
         :param sentences: list of sentences in the key language

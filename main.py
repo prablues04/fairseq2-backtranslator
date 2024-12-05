@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     # Use max_seq_len=100 to avoid out of memory of local device
     backtranslator = Backtranslator(t2tpipeline=t2tpipeline, device=device, max_seq_len=100)
-    train_losses, validation_losses = backtranslator.backtranslate(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=5, lr=0.02, batch_size=3, validation_sentences=test)
+    train_losses, validation_losses = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=5, lr=0.01, batch_size=5, validation_sentences=test)
     print(f"Train losses: {train_losses}")
     print(f"Validation losses: {validation_losses}")
     # Export epoch losses to a separate file
