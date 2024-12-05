@@ -13,6 +13,21 @@ class Backtranslator():
         self.max_seq_len = max_seq_len
         self.device = torch.device(device)
         self.t2t_model : EncoderDecoderModel = t2tpipeline
+    
+    class Information:
+        def __init__(self, train_losses: List[float] = [], validation_losses: List[float] = [], time_per_epoch: List[float] = []):
+            self.train_losses = train_losses
+            self.validation_losses = validation_losses
+            self.time_per_epoch = time_per_epoch
+
+        def add_train_loss(self, loss: float):
+            self.train_losses.append(loss)
+
+        def add_validation_loss(self, loss: float):
+            self.validation_losses.append(loss)
+
+        def add_time_per_epoch(self, time: float):
+            self.time_per_epoch.append(time)
 
     def predict(self, data, source_lang, target_lang):
         """
@@ -33,7 +48,7 @@ class Backtranslator():
 
         :return: validation loss for the model
         """
-        info : BacktranslateInformation = self.perform_backtranslation_training(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)
+        info : Information = self.perform_backtranslation_training(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)
         return info.train_losses[0]
 
     def generate_forward_pass_logits(self, input_tokens, seq_padding_mask, batch_size) -> tuple[torch.Tensor, PaddingMask]:
@@ -130,14 +145,12 @@ class Backtranslator():
         num_batches = ceil(len(sentences) / batch_size)
         assert num_batches > 0, "Number of batches must be greater than 0"
 
-        train_losses = []
-        validation_losses = []
-        time_per_epoch = []
+        information = Backtranslator.Information()
 
         # Store initial train/validation losses before training starts
         if validation_sentences:
             validation_loss = self.compute_validation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
-            validation_losses.append(validation_loss)
+            information.add_validation_loss(validation_loss)
 
         # Repeat for multiple epochs
         for epoch in range(num_epochs):
@@ -237,16 +250,16 @@ class Backtranslator():
             # for the final batch in the epoch, calculate the validation loss
             if validation_sentences and batch_idx == num_batches - 1:
                 validation_loss = self.compute_validation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
-                validation_losses.append(validation_loss)
+                information.add_validation_loss(validation_loss)
             
             # Store the average train loss for the epoch
-            train_losses.append(epoch_loss / len(sentences))
+            information.add_train_loss(epoch_loss / len(sentences))
 
             # Cool down the CPU and GPU!
             time.sleep(3.)
             
             # Store the time taken for the epoch
-            time_per_epoch.append(time.time() - start_time)
+            information.add_time_per_epoch(time.time() - start_time)
 
             final_parameters_pipeline = self.t2t_model.parameters(True)
             final_parameters = list(iter(final_parameters_pipeline))
@@ -262,11 +275,10 @@ class Backtranslator():
         # Since training losses are computed in before model update, the final training loss requires recomputation
         if training:
             train_loss = self.compute_validation_loss(sentences, key_lang, intermediate_lang, batch_size=batch_size)
-            train_losses.append(train_loss)
+            information.add_time_per_epoch(train_loss)
             print(f"Final loss on train dataset: {train_loss}\n")
 
         self.t2t_model.eval()
-        information = BacktranslateInformation(train_losses=train_losses, validation_losses=validation_losses, time_per_epoch=time_per_epoch)
         if validation_sentences:
             print(f"Final validation loss: {information.validation_losses}\n")
             print(f"Final train loss: {information.train_losses}\n")
@@ -276,19 +288,3 @@ class Backtranslator():
         
         torch.save(self.t2t_model.state_dict(), "backtranslate_model.pth")
         return information
-
-
-class BacktranslateInformation:
-    def __init__(self, train_losses: List[float] = [], validation_losses: List[float] = [], time_per_epoch: List[float] = []):
-        self.train_losses = train_losses
-        self.validation_losses = validation_losses
-        self.time_per_epoch = time_per_epoch
-
-    def add_train_loss(self, loss: float):
-        self.train_losses.append(loss)
-
-    def add_validation_loss(self, loss: float):
-        self.validation_losses.append(loss)
-
-    def add_time_per_epoch(self, time: float):
-        self.time_per_epoch.append(time)

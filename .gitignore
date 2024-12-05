@@ -6,3 +6,6 @@
 
 # ignore all pycache files
 __pycache__/
+
+# ignore all pth (model) files
+*.pth

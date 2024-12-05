@@ -7,7 +7,7 @@ from sonar.models.sonar_text import (
     load_sonar_text_encoder_model,
     load_sonar_tokenizer
 )
-from backtranslator import Backtranslator, BacktranslateInformation
+from backtranslator import Backtranslator
 
 if __name__ == "__main__":
     device = (
@@ -38,9 +38,11 @@ if __name__ == "__main__":
 
     # Use max_seq_len=100 to avoid out of memory of local device
     backtranslator = Backtranslator(t2tpipeline=t2tpipeline, device=device, max_seq_len=100)
+
+
     
     # Train model using backtranslation and return losses
-    information : BacktranslateInformation = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=2, lr=0.005, batch_size=5, validation_sentences=test, training=True)
+    information : Backtranslator.Information = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=2, lr=0.005, batch_size=5, validation_sentences=test, training=True)
     
     print(f"Train losses: {information.train_losses}")
     print(f"Validation losses: {information.validation_losses}")
