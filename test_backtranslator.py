@@ -15,6 +15,7 @@ class BacktranslatorTest(unittest.TestCase):
     # TODO: Test with other fairseq2 models - not just SONAR
     # TODO: Test training=false prevents model parameter updates during perform_backtranslation_training
     # TODO: Test compute_validation_loss
+    # TODO: Test backtranslation training with validation set
     # TODO: Test behaviour with more or fewer epochs, batch_sizes, etc.
 
     def setUp(self):
@@ -30,10 +31,13 @@ class BacktranslatorTest(unittest.TestCase):
         Given a reasonable choice of hyperparameters, ensure that backtranslation improves the performance of a model
         """
         start_time = time.time()
-        data = pd.read_csv('./test-sentences-english-50.csv')
-        assert len(data) > 5, "Test data is too small (<= 5 entries) - check the test data file: test-sentences-english-50.csv"
 
+        data = pd.read_csv('./test-sentences-english-50.csv')
+        
+        assert len(data) > 5, "Test data is too small (<= 5 entries) - check the test data file: test-sentences-english-50.csv"
+        
         train_info : Backtranslator.Information = self.backtranslator.perform_backtranslation_training(sentences=data['sentences'][:5].tolist(), key_lang='eng_Latn', intermediate_lang='tel_Telu', num_epochs=1, lr=0.01, batch_size=5, training=True)
+
         print(f"Train losses: {train_info.train_losses}")
         self.assertGreater(train_info.train_losses[0], train_info.train_losses[-1], "Backtranslation did not improve the performance of the model on the training set with a reasonable choice of hyperparameters")
         print(f"Time taken to test backtranslation_improves_train_performance: {time.time() - start_time} seconds")

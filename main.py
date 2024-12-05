@@ -24,7 +24,7 @@ if __name__ == "__main__":
     print(data)
 
     # Shuffle data
-    data = data.sample(frac=1).reset_index(drop=True)[:10]
+    data = data.sample(frac=1).reset_index(drop=True)
     train, test = data[:int(0.8*len(data))].values.flatten().tolist(), data[int(0.8*len(data)):].values.flatten().tolist()
     print(train)
     print(test)
@@ -39,10 +39,8 @@ if __name__ == "__main__":
     # Use max_seq_len=100 to avoid out of memory of local device
     backtranslator = Backtranslator(t2tpipeline=t2tpipeline, device=device, max_seq_len=100)
 
-
-    
     # Train model using backtranslation and return losses
-    information : Backtranslator.Information = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=2, lr=0.005, batch_size=5, validation_sentences=test, training=True)
+    information : Backtranslator.Information = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=20, lr=0.003, batch_size=5, validation_sentences=test, training=True)
     
     print(f"Train losses: {information.train_losses}")
     print(f"Validation losses: {information.validation_losses}")
@@ -52,5 +50,5 @@ if __name__ == "__main__":
 
     # Export epoch losses to csv file for further analysis
     losses_df = pd.DataFrame({"validation_losses": information.validation_losses, "train_losses": information.train_losses, "time_per_epoch": time_per_epoch})
-    losses_df.to_csv("backtranslate_train_information.csv", index=True)
+    losses_df.to_csv("backtranslate_train_information_no_cache_clearing.csv", index=True)
     
