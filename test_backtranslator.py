@@ -6,7 +6,7 @@ from sonar.models.sonar_text import (
     load_sonar_tokenizer
 )
 import torch
-from sonar.inference_pipelines.text import TextToTextModelPipeline
+from sonar.models.sonar_translation import SonarEncoderDecoderModel
 import pandas as pd
 import time
 
@@ -23,8 +23,8 @@ class BacktranslatorTest(unittest.TestCase):
         decoder = load_sonar_text_decoder_model('text_sonar_basic_decoder')
         tokenizer = load_sonar_tokenizer('text_sonar_basic_encoder')
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        t2tpipeline = TextToTextModelPipeline(encoder, decoder, tokenizer, device)
-        self.backtranslator = Backtranslator(t2tpipeline=t2tpipeline, device=device, max_seq_len=100)
+        enc_dec_model = SonarEncoderDecoderModel(encoder, decoder).to(device=device).eval()
+        self.backtranslator = Backtranslator(model=enc_dec_model, tokenizer=tokenizer, device=device, max_seq_len=100)
 
     def test_backtranslation_improves_train_performance(self):
         """
@@ -42,5 +42,13 @@ class BacktranslatorTest(unittest.TestCase):
         self.assertGreater(train_info.train_losses[0], train_info.train_losses[-1], "Backtranslation did not improve the performance of the model on the training set with a reasonable choice of hyperparameters")
         print(f"Time taken to test backtranslation_improves_train_performance: {time.time() - start_time} seconds")
 
+    # def test_generate_sentence_pairs(self):
+    #     """
+    #     Test that the function generate_sentence_pairs correctly generates parallel translations
+    #     """
+    #     source_sentences = ["the ocean is blue"]
+    #     target_sentences = ["el mar es azul"]
+    #     source_sentences_tensor = 
+    #     target
 if __name__ == '__main__':
     unittest.main()

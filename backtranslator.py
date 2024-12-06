@@ -3,16 +3,22 @@ from math import ceil
 import time
 from fairseq2.data.data_pipeline import read_sequence
 # TODO: Understand benefits of typing library as opposed to collections
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 from fairseq2.nn.padding import PaddingMask, pad_seqs
 from fairseq2.models.encoder_decoder import EncoderDecoderModel
+from fairseq2.data.text.text_tokenizer import TextTokenizer
+from fairseq2.models.seq2seq import Seq2SeqBatch
+from fairseq2.models.sequence import SequenceModelOutput
+from fairseq2.data.text.text_tokenizer import TextTokenizer, TextTokenDecoder, TextTokenEncoder
 
 class Backtranslator():
 
-    def __init__(self, t2tpipeline, max_seq_len=256, device="cuda" if torch.cuda.is_available() else "cpu") :
+    def __init__(self, model, tokenizer, max_seq_len=256, device="cuda" if torch.cuda.is_available() else "cpu") :
         self.max_seq_len = max_seq_len
         self.device = torch.device(device)
-        self.t2t_model : EncoderDecoderModel = t2tpipeline
+        self.enc_dec_model : EncoderDecoderModel = model
+        self.tokenizer : TextTokenizer = tokenizer
+        
     
     class Information:
         def __init__(self, train_losses: List[float] = [], validation_losses: List[float] = [], time_per_epoch: List[float] = []):
@@ -27,7 +33,7 @@ class Backtranslator():
         @param source_lang: str
         @param target_lang: str
         """
-        return self.t2t_model.predict(data, source_lang=source_lang, target_lang=target_lang, progress_bar=True)
+        pass
     
     def compute_validation_loss(self, sentences, key_lang, intermediate_lang, batch_size=5) -> float:
         """
@@ -42,6 +48,27 @@ class Backtranslator():
         info : Backtranslator.Information = self.perform_backtranslation_training(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)
         return info.train_losses[0]
 
+    def generate_sentence_pairs(self, sentences : torch.Tensor, key_lang : str, intermediate_lang : str, batch_size=5, padding_mask=None) -> List[str]:
+        """
+        Generate sentence pairs for backtranslation
+        :param sentences: list of sentences in the key language
+        :param key_lang: the key language - i.e. input-output language backtranslation is performed on
+        :param intermediate_lang: the intermediate language backtranslation is performed on
+        :param batch_size
+        
+        :return: tuple of sentence pairs
+        """
+        # Create empty output tensor for intermediate tokens, filled with padding tokens
+        empty_output : torch.Tensor = torch.full((batch_size, self.max_seq_len,), fill_value=self.tokenizer.vocab_info.pad_idx, device=self.device)
+        # Fill first column with beginning of sentence token
+        empty_output[:, 0] = self.tokenizer.vocab_info.bos_idx
+        output_sentence_embeddings : SequenceModelOutput = self.enc_dec_model.forward(Seq2SeqBatch(source_seqs=sentences, source_padding_mask=padding_mask, target_seqs=empty_output, target_padding_mask=padding_mask))
+        decoder : TextTokenDecoder = self.tokenizer.create_decoder(lang=intermediate_lang)
+
+        target_sentences : List[str] = decoder(output_sentence_embeddings.logits.argmax(dim=-1))
+        print(f"Target sentences: {target_sentences}\n")
+        return target_sentences
+
     def generate_forward_pass_logits(self, input_tokens, seq_padding_mask, batch_size) -> tuple[torch.Tensor, PaddingMask]:
         """
         Generate target tokens from the input tokens
@@ -51,21 +78,21 @@ class Backtranslator():
         :return: logits for target language
         """
         # Generate embeddings for source tokens
-        embeddings, enc_padding_mask = self.t2t_model.model.encode(input_tokens, padding_mask=seq_padding_mask)
+        embeddings, enc_padding_mask = self.enc_dec_model.encode(input_tokens, padding_mask=seq_padding_mask)
         
         # Create empty output tensor for intermediate tokens, filled with padding tokens
-        empty_output = torch.full((batch_size, self.max_seq_len,), fill_value=self.t2t_model.tokenizer.vocab_info.pad_idx, device=self.device)
+        empty_output = torch.full((batch_size, self.max_seq_len,), fill_value=self.tokenizer.vocab_info.pad_idx, device=self.device)
         # Fill first column with beginning of sentence token
-        empty_output[:, 0] = self.t2t_model.tokenizer.vocab_info.bos_idx
+        empty_output[:, 0] = self.tokenizer.vocab_info.bos_idx
 
         # Generate intermediate representations and convert to logits
-        predictions_target, dec_padding_mask = self.t2t_model.model.decode(
+        predictions_target, dec_padding_mask = self.enc_dec_model.decode(
             empty_output,
-            padding_mask=seq_padding_mask,
+            padding_mask=seq_padding_mask, # use the same padding mask as the input tokens as intermediate tokens will be same length, with same tokenizer
             encoder_output=embeddings.detach(),
             encoder_padding_mask=enc_padding_mask)
 
-        predictions_target_logits = self.t2t_model.model.project(predictions_target.detach(), decoder_padding_mask=dec_padding_mask).logits.to(device=self.device)
+        predictions_target_logits = self.enc_dec_model.project(predictions_target.detach(), decoder_padding_mask=dec_padding_mask).logits.to(device=self.device)
         
         return predictions_target_logits, dec_padding_mask
 
@@ -83,6 +110,40 @@ class Backtranslator():
         :return: validation loss
         """
         pass
+
+    def make_tokens_from_strings(self, sentences: List[str], lang: str, text_tokenizer : TextTokenEncoder = None) -> Tuple[torch.Tensor, PaddingMask]:
+        """
+        Convert a list of sentences to a list of tokenised tensors
+        :param sentences: list of sentences
+        :param lang: language of the sentences
+        
+        :return: list of tokenised tensors
+        """
+        def truncate(x: torch.Tensor) -> torch.Tensor:
+            """
+            truncate shortens the input sequence (tensor) to the maximum sequence length and returns a tensor
+            """
+            if x.shape[0] > self.max_seq_len:
+                n_truncated += 1
+            return x[:self.max_seq_len]
+        
+        if not text_tokenizer:
+            text_tokenizer = self.tokenizer.create_encoder(lang=lang)
+
+        generate_tokens : Iterable = (
+            (
+                read_sequence(sentences)
+            )
+            .map(lambda x: text_tokenizer(x).to(device=self.device).detach())
+            .map(lambda x: truncate(x).to(device=self.device).detach())
+            .and_return()
+        )
+
+        input_tokens_list : List[torch.Tensor] = list(iter(generate_tokens))
+        seq_lens : torch.Tensor = torch.tensor([len(sentences) for sentences in input_tokens_list], device=self.device)
+        seq_padding_mask : PaddingMask = PaddingMask(seq_lens=seq_lens, batch_seq_len=self.max_seq_len).to(device=self.device)
+        input_tokens : torch.Tensor = pad_seqs(input_tokens_list, pad_value=self.tokenizer.vocab_info.pad_idx, pad_to_multiple=self.max_seq_len)[0]
+        return input_tokens, seq_padding_mask
      
     # TODO: Abstract function for arbitrary backtranslation depth
     # TODO: Create tests for backtranslation
@@ -115,30 +176,20 @@ class Backtranslator():
 
         if training:
             # Sets model to training mode - affects dropout, batchnorm, etc.
-            self.t2t_model.train()
+            self.enc_dec_model.train()
         else:
-            self.t2t_model.eval()
+            self.enc_dec_model.eval()
         
         loss_fn = torch.nn.CrossEntropyLoss()
 
         # Define the optimizer - choose Adam optimizer for now
         # TODO: Identify if better optimiser exists
-        optimizer = None if not training else torch.optim.Adam(self.t2t_model.parameters(), lr=lr)
+        optimizer = None if not training else torch.optim.Adam(self.enc_dec_model.parameters(), lr=lr)
 
-        initial_parameters_pipeline = self.t2t_model.parameters(True)
+        initial_parameters_pipeline = self.enc_dec_model.parameters(True)
         init_parameters = list(iter(initial_parameters_pipeline))
-
-        n_truncated = 0
-        def truncate(x: torch.Tensor) -> torch.Tensor:
-            """
-            truncate shortens the input sequence (tensor) to the maximum sequence length and returns a tensor
-            """
-            if x.shape[0] > self.max_seq_len:
-                nonlocal n_truncated
-                n_truncated += 1
-            return x[:self.max_seq_len]
         
-        token_encoder = self.t2t_model.tokenizer.create_encoder(lang=key_lang)
+        text_tokenizer = self.tokenizer.create_encoder(lang=key_lang)
         num_batches = ceil(len(sentences) / batch_size)
         assert num_batches > 0, "Number of batches must be greater than 0"
 
@@ -169,42 +220,27 @@ class Backtranslator():
                 as possible to reduce memory usage. To avoid re-computation, pre-process all sentences into tensor/token format
                 before entering the loops.
                 """
-
                 # Convert the interested part of the input data (i.e. data within the current batch) to tokens with padding
-                generate_tokens : Iterable = (
-                    (
-                        read_sequence(sentences[start_idx:end_idx])
-                    )
-                    .map(lambda x: token_encoder(x).to(device=self.device).detach())
-                    .map(lambda x: truncate(x).to(device=self.device).detach())
-                    .and_return()
-                )
+                input_tokens, seq_padding_mask = self.make_tokens_from_strings(sentences[start_idx:end_idx], key_lang, text_tokenizer=text_tokenizer)
 
-                input_tokens_list : List[torch.Tensor] = list(iter(generate_tokens))
-                seq_lens = torch.tensor([len(sentences) for sentences in input_tokens_list], device=self.device)
-                seq_padding_mask = PaddingMask(seq_lens=seq_lens, batch_seq_len=self.max_seq_len).to(device=self.device)
-                input_tokens, _ = pad_seqs(input_tokens_list, pad_value=self.t2t_model.tokenizer.vocab_info.pad_idx, pad_to_multiple=self.max_seq_len)
+                # if epoch == 0 or epoch == num_epochs - 1 or epoch % 5 == 0:
 
-                if epoch == 0 or epoch == num_epochs - 1 or epoch % 5 == 0:
+                #     self.enc_dec_model.train(False)
+                #     intermediate = self.predict(sentences[start_idx:end_idx], source_lang=key_lang, target_lang=intermediate_lang, progress_bar=True)
+                #     output = self.predict(intermediate, source_lang=intermediate_lang, target_lang=key_lang, progress_bar=True)
 
-                    self.t2t_model.train(False)
-                    intermediate = self.t2t_model.predict(sentences[start_idx:end_idx], source_lang=key_lang, target_lang=intermediate_lang, progress_bar=True)
-                    output = self.t2t_model.predict(intermediate, source_lang=intermediate_lang, target_lang=key_lang, progress_bar=True)
+                #     with open("debug_output_large_test.txt", "a") as f:
+                #         f.write(f"Epoch: {epoch + 1}\n")
+                #         f.write(f"Batch: {batch_idx + 1}\n")
+                #         f.write(f"Input: {sentences[start_idx:end_idx]}\n")
+                #         f.write(f"Intermediate: {intermediate}\n")
+                #         f.write(f"Output: {output}\n")
+                #         f.write("\n")
 
-                    with open("debug_output.txt", "a") as f:
-                        f.write(f"Epoch: {epoch + 1}\n")
-                        f.write(f"Batch: {batch_idx + 1}\n")
-                        f.write(f"Input: {sentences[start_idx:end_idx]}\n")
-                        f.write(f"Intermediate: {intermediate}\n")
-                        f.write(f"Output: {output}\n")
-                        f.write("\n")
-
-                    if training:
-                        self.t2t_model.train()
-                    else:
-                        self.t2t_model.eval()
-
-                # TODO: Run batch training with a pipeline instead of manual batching and for loop (if this is more efficient)
+                #     if training:
+                #         self.enc_dec_model.train()
+                #     else:
+                #         self.enc_dec_model.eval()
                 
                 # 2a. Translate to intermediate language representation
                 predictions_intermediate_logits, dec_padding_mask = self.generate_forward_pass_logits(input_tokens, seq_padding_mask, this_batch_size)
@@ -254,7 +290,7 @@ class Backtranslator():
             # Store the time taken for the epoch
             time_per_epoch.append(time.time() - start_time)
 
-            final_parameters_pipeline = self.t2t_model.parameters(True)
+            final_parameters_pipeline = self.enc_dec_model.parameters(True)
             final_parameters = list(iter(final_parameters_pipeline))
 
             if training:
@@ -271,7 +307,7 @@ class Backtranslator():
             train_losses.append(train_loss)
             print(f"Final loss on train dataset: {train_loss}\n")
 
-        self.t2t_model.eval()
+        self.enc_dec_model.eval()
         information = Backtranslator.Information(train_losses=train_losses, validation_losses=validation_losses, time_per_epoch=time_per_epoch)
         if validation_sentences:
             print(f"Final validation loss: {information.validation_losses}\n")
@@ -281,5 +317,5 @@ class Backtranslator():
             assert len(information.train_losses) == len(information.validation_losses), "Train and validation losses must be the same length"
         
         if save_model_name:
-            torch.save(self.t2t_model.state_dict(), save_model_name + ".pth")
+            torch.save(self.enc_dec_model.state_dict(), save_model_name + ".pth")
         return information

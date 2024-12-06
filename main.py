@@ -1,7 +1,6 @@
 import torch
 import pandas as pd
-from datasets import load_dataset
-from sonar.inference_pipelines.text import TextToTextModelPipeline
+from sonar.models.sonar_translation import SonarEncoderDecoderModel
 from sonar.models.sonar_text import (
     load_sonar_text_decoder_model,
     load_sonar_text_encoder_model,
@@ -34,13 +33,13 @@ if __name__ == "__main__":
     encoder = load_sonar_text_encoder_model("text_sonar_basic_encoder", progress=True, device=device)
     decoder = load_sonar_text_decoder_model("text_sonar_basic_decoder", progress=True, device=device)
     tokenizer = load_sonar_tokenizer("text_sonar_basic_encoder", progress=True)
-    t2tpipeline = TextToTextModelPipeline(encoder=encoder, decoder=decoder, tokenizer=tokenizer).to(device=device)
+    enc_dec_model = SonarEncoderDecoderModel(encoder=encoder, decoder=decoder).to(device=device).eval()
 
     # Use max_seq_len=100 to avoid out of memory of local device
-    backtranslator = Backtranslator(t2tpipeline=t2tpipeline, device=device, max_seq_len=100)
+    backtranslator = Backtranslator(model=enc_dec_model, tokenizer=tokenizer, device=device, max_seq_len=100)
 
     # Train model using backtranslation and return losses
-    information : Backtranslator.Information = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=20, lr=0.003, batch_size=5, validation_sentences=test, training=True)
+    information : Backtranslator.Information = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=50, lr=0.0025, batch_size=5, validation_sentences=test, training=True, save_model_name="50-50-backtranslate-model-english")
     
     print(f"Train losses: {information.train_losses}")
     print(f"Validation losses: {information.validation_losses}")
@@ -50,5 +49,5 @@ if __name__ == "__main__":
 
     # Export epoch losses to csv file for further analysis
     losses_df = pd.DataFrame({"validation_losses": information.validation_losses, "train_losses": information.train_losses, "time_per_epoch": time_per_epoch})
-    losses_df.to_csv("backtranslate_train_information_no_cache_clearing.csv", index=True)
+    losses_df.to_csv("backtranslate_train_information_with_cache_clearing.csv", index=True)
     
