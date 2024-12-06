@@ -74,33 +74,6 @@ class Backtranslator():
         info : Backtranslator.Information = self.perform_backtranslation_training(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)
         return info.train_losses[0]
 
-    def generate_sentence_pairs(self, sentences : torch.Tensor, key_lang : str, intermediate_lang : str, batch_size=5, padding_mask=None, **generator_kwargs) -> List[str]:
-        """
-        Generate sentence pairs for backtranslation
-        :param sentences: list of sentences in the key language
-        :param key_lang: the key language - i.e. input-output language backtranslation is performed on
-        :param intermediate_lang: the intermediate language backtranslation is performed on
-        :param batch_size
-        
-        :return: tuple of sentence pairs
-        """
-        # Create empty output tensor for intermediate tokens, filled with padding tokens
-        empty_output : torch.Tensor = torch.full((batch_size, self.max_seq_len,), fill_value=self.tokenizer.vocab_info.pad_idx, device=self.device)
-        # Fill first column with beginning of sentence token
-        empty_output[:, 0] = self.tokenizer.vocab_info.bos_idx
-        self.tokenizer.create_decoder()
-        output_sentence_embeddings : SequenceModelOutput = self.enc_dec_model.forward(Seq2SeqBatch(source_seqs=sentences, source_padding_mask=padding_mask, target_seqs=empty_output, target_padding_mask=padding_mask))
-        decoder : TextTokenDecoder = self.tokenizer.create_decoder()
-        print(f"Output sentence embeddings shape: {output_sentence_embeddings.logits.argmax(dim=-1).shape}\n")
-        print(f"Output sentence embeddings shape before argmax: {output_sentence_embeddings.logits.shape}\n")
-
-        target_sentences = []
-        for row in output_sentence_embeddings.logits.argmax(dim=-1):
-            target_sentences.append(decoder(row))
-
-        print(f"Target sentences: {target_sentences}\n")
-        return target_sentences
-
     def generate_batch_logits(self, input_tokens, seq_padding_mask, batch_size) -> tuple[torch.Tensor, PaddingMask]:
         """
         Generate target tokens from the input tokens
