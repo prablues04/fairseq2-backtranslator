@@ -39,7 +39,9 @@ if __name__ == "__main__":
     backtranslator = Backtranslator(model=enc_dec_model, tokenizer=tokenizer, device=device, max_seq_len=100)
 
     # Train model using backtranslation and return losses
-    information : Backtranslator.Information = backtranslator.perform_backtranslation_training(sentences=train, key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=50, lr=0.0025, batch_size=5, validation_sentences=test, training=True, save_model_name="50-50-backtranslate-model-english")
+    information : Backtranslator.Information = backtranslator.perform_backtranslation_training(sentences=train, 
+        key_lang="eng_Latn", intermediate_lang="tel_Telu", num_epochs=50, lr=0.0025, batch_size=5, 
+        validation_sentences=test, training=True, save_model_name="backtranslate-model-english-50-50-0.0025-5")
     
     print(f"Train losses: {information.train_losses}")
     print(f"Validation losses: {information.validation_losses}")

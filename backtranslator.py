@@ -234,7 +234,7 @@ class Backtranslator():
         # translate outside of the loop to avoid repeated computation - though memory may take a hit for large datasets
         intermediate_sentences : List[str] = Backtranslator.predict(sentences, source_lang=key_lang, 
                                                                     target_lang=intermediate_lang, model=self.enc_dec_model, tokenizer=self.tokenizer, 
-                                                                    batch_size=this_batch_size)
+                                                                    batch_size=batch_size)
         print(f"Intermediate sentences: {intermediate_sentences}\n")
 
         # Repeat for multiple epochs
