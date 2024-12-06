@@ -42,13 +42,6 @@ class BacktranslatorTest(unittest.TestCase):
         self.assertGreater(train_info.train_losses[0], train_info.train_losses[-1], "Backtranslation did not improve the performance of the model on the training set with a reasonable choice of hyperparameters")
         print(f"Time taken to test backtranslation_improves_train_performance: {time.time() - start_time} seconds")
 
-    # def test_generate_sentence_pairs(self):
-    #     """
-    #     Test that the function generate_sentence_pairs correctly generates parallel translations
-    #     """
-    #     source_sentences = ["the ocean is blue"]
-    #     target_sentences = ["el mar es azul"]
-    #     source_sentences_tensor = 
-    #     target
+
 if __name__ == '__main__':
     unittest.main()

@@ -3,13 +3,19 @@ from math import ceil
 import time
 from fairseq2.data.data_pipeline import read_sequence
 # TODO: Understand benefits of typing library as opposed to collections
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Sequence
 from fairseq2.nn.padding import PaddingMask, pad_seqs
 from fairseq2.models.encoder_decoder import EncoderDecoderModel
 from fairseq2.data.text.text_tokenizer import TextTokenizer
 from fairseq2.models.seq2seq import Seq2SeqBatch
 from fairseq2.models.sequence import SequenceModelOutput
 from fairseq2.data.text.text_tokenizer import TextTokenizer, TextTokenDecoder, TextTokenEncoder
+from fairseq2.generation.beam_search import BeamSearchSeq2SeqGenerator
+from fairseq2.generation.text import TextTranslator
+from fairseq2.data.cstring import CString
+from fairseq2.data.typing import StringLike
+from fairseq2.data.text import read_text
+
 
 class Backtranslator():
 
@@ -26,14 +32,34 @@ class Backtranslator():
             self.validation_losses = validation_losses
             self.time_per_epoch = time_per_epoch
 
-    def predict(self, data, source_lang, target_lang):
-        """
-        Predict the translations for the input text data
-        @param data: list of sentences
-        @param source_lang: str
-        @param target_lang: str
-        """
-        pass
+    @staticmethod
+    def predict(input: Sequence[str], source_lang: str, target_lang: str, tokenizer : TextTokenizer, 
+                model: EncoderDecoderModel, batch_size: int = 5, **generator_kwargs) -> List[str]:
+        generator = BeamSearchSeq2SeqGenerator(model, **generator_kwargs)
+        translator = TextTranslator(
+            generator,
+            tokenizer=tokenizer,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+
+        def _do_translate(src_texts: List[StringLike]) -> List[StringLike]:
+            texts, _ = translator.batch_translate(src_texts)
+            return texts
+
+        pipeline: Iterable = (
+            (
+                read_text(input)
+                if isinstance(input, str)
+                else read_sequence(input)
+            )
+            .bucket(batch_size)
+            .map(_do_translate)
+            .and_return()
+        )
+
+        results: List[List[CString]] = list(iter(pipeline))
+        return [str(x) for y in results for x in y]
     
     def compute_validation_loss(self, sentences, key_lang, intermediate_lang, batch_size=5) -> float:
         """
@@ -48,7 +74,7 @@ class Backtranslator():
         info : Backtranslator.Information = self.perform_backtranslation_training(sentences, key_lang, intermediate_lang, num_epochs=1, batch_size=batch_size, training=False)
         return info.train_losses[0]
 
-    def generate_sentence_pairs(self, sentences : torch.Tensor, key_lang : str, intermediate_lang : str, batch_size=5, padding_mask=None) -> List[str]:
+    def generate_sentence_pairs(self, sentences : torch.Tensor, key_lang : str, intermediate_lang : str, batch_size=5, padding_mask=None, **generator_kwargs) -> List[str]:
         """
         Generate sentence pairs for backtranslation
         :param sentences: list of sentences in the key language
@@ -62,14 +88,20 @@ class Backtranslator():
         empty_output : torch.Tensor = torch.full((batch_size, self.max_seq_len,), fill_value=self.tokenizer.vocab_info.pad_idx, device=self.device)
         # Fill first column with beginning of sentence token
         empty_output[:, 0] = self.tokenizer.vocab_info.bos_idx
+        self.tokenizer.create_decoder()
         output_sentence_embeddings : SequenceModelOutput = self.enc_dec_model.forward(Seq2SeqBatch(source_seqs=sentences, source_padding_mask=padding_mask, target_seqs=empty_output, target_padding_mask=padding_mask))
-        decoder : TextTokenDecoder = self.tokenizer.create_decoder(lang=intermediate_lang)
+        decoder : TextTokenDecoder = self.tokenizer.create_decoder()
+        print(f"Output sentence embeddings shape: {output_sentence_embeddings.logits.argmax(dim=-1).shape}\n")
+        print(f"Output sentence embeddings shape before argmax: {output_sentence_embeddings.logits.shape}\n")
 
-        target_sentences : List[str] = decoder(output_sentence_embeddings.logits.argmax(dim=-1))
+        target_sentences = []
+        for row in output_sentence_embeddings.logits.argmax(dim=-1):
+            target_sentences.append(decoder(row))
+
         print(f"Target sentences: {target_sentences}\n")
         return target_sentences
 
-    def generate_forward_pass_logits(self, input_tokens, seq_padding_mask, batch_size) -> tuple[torch.Tensor, PaddingMask]:
+    def generate_batch_logits(self, input_tokens, seq_padding_mask, batch_size) -> tuple[torch.Tensor, PaddingMask]:
         """
         Generate target tokens from the input tokens
         :param input_tokens: input tokens
@@ -111,7 +143,7 @@ class Backtranslator():
         """
         pass
 
-    def make_tokens_from_strings(self, sentences: List[str], lang: str, text_tokenizer : TextTokenEncoder = None) -> Tuple[torch.Tensor, PaddingMask]:
+    def _make_tokens_from_strings(self, sentences: List[str], lang: str, text_tokenizer : TextTokenEncoder = None) -> Tuple[torch.Tensor, PaddingMask]:
         """
         Convert a list of sentences to a list of tokenised tensors
         :param sentences: list of sentences
@@ -124,11 +156,11 @@ class Backtranslator():
             truncate shortens the input sequence (tensor) to the maximum sequence length and returns a tensor
             """
             if x.shape[0] > self.max_seq_len:
-                n_truncated += 1
-            return x[:self.max_seq_len]
+                return x[:self.max_seq_len]
+            return x
         
         if not text_tokenizer:
-            text_tokenizer = self.tokenizer.create_encoder(lang=lang)
+            text_tokenizer : TextTokenEncoder = self.tokenizer.create_encoder(lang=lang)
 
         generate_tokens : Iterable = (
             (
@@ -181,9 +213,6 @@ class Backtranslator():
             self.enc_dec_model.eval()
         
         loss_fn = torch.nn.CrossEntropyLoss()
-
-        # Define the optimizer - choose Adam optimizer for now
-        # TODO: Identify if better optimiser exists
         optimizer = None if not training else torch.optim.Adam(self.enc_dec_model.parameters(), lr=lr)
 
         initial_parameters_pipeline = self.enc_dec_model.parameters(True)
@@ -201,6 +230,12 @@ class Backtranslator():
         if validation_sentences:
             validation_loss = self.compute_validation_loss(validation_sentences, key_lang, intermediate_lang, batch_size=batch_size)
             validation_losses.append(validation_loss)
+        
+        # translate outside of the loop to avoid repeated computation - though memory may take a hit for large datasets
+        intermediate_sentences : List[str] = Backtranslator.predict(sentences, source_lang=key_lang, 
+                                                                    target_lang=intermediate_lang, model=self.enc_dec_model, tokenizer=self.tokenizer, 
+                                                                    batch_size=this_batch_size)
+        print(f"Intermediate sentences: {intermediate_sentences}\n")
 
         # Repeat for multiple epochs
         for epoch in range(num_epochs):
@@ -221,56 +256,53 @@ class Backtranslator():
                 before entering the loops.
                 """
                 # Convert the interested part of the input data (i.e. data within the current batch) to tokens with padding
-                input_tokens, seq_padding_mask = self.make_tokens_from_strings(sentences[start_idx:end_idx], key_lang, text_tokenizer=text_tokenizer)
+                input_tokens : torch.Tensor
+                src_padding_mask : PaddingMask
+                input_tokens, src_padding_mask = self._make_tokens_from_strings(sentences[start_idx:end_idx], key_lang, text_tokenizer=text_tokenizer)
 
-                # if epoch == 0 or epoch == num_epochs - 1 or epoch % 5 == 0:
 
-                #     self.enc_dec_model.train(False)
-                #     intermediate = self.predict(sentences[start_idx:end_idx], source_lang=key_lang, target_lang=intermediate_lang, progress_bar=True)
-                #     output = self.predict(intermediate, source_lang=intermediate_lang, target_lang=key_lang, progress_bar=True)
+                # Convert the intermediate sentences to tokens with padding
+                intermediate_tokenised : torch.Tensor
+                inter_padding_mask : PaddingMask
+                intermediate_tokenised, inter_padding_mask = self._make_tokens_from_strings(intermediate_sentences[start_idx:end_idx], intermediate_lang)
 
-                #     with open("debug_output_large_test.txt", "a") as f:
-                #         f.write(f"Epoch: {epoch + 1}\n")
-                #         f.write(f"Batch: {batch_idx + 1}\n")
-                #         f.write(f"Input: {sentences[start_idx:end_idx]}\n")
-                #         f.write(f"Intermediate: {intermediate}\n")
-                #         f.write(f"Output: {output}\n")
-                #         f.write("\n")
-
-                #     if training:
-                #         self.enc_dec_model.train()
-                #     else:
-                #         self.enc_dec_model.eval()
+                assert intermediate_tokenised.size(0) == input_tokens.size(0), "Intermediate and input tokens must have the same batch size"
+                # We now have sentence pairs in the form of intermediate_tokenised and input_tokens tensors    
                 
-                # 2a. Translate to intermediate language representation
-                predictions_intermediate_logits, dec_padding_mask = self.generate_forward_pass_logits(input_tokens, seq_padding_mask, this_batch_size)
+                # Compute loss by resizing (batch_size, seq_len, vocab_size) to (batch_size * seq_len, vocab_size)
+                # Resize input tokens from (batch_size, seq_len) to (batch_size * seq_len)
 
-                # Derive tokenised intermediate representations from logits
-                predictions_intermediate_tokenised = predictions_intermediate_logits.argmax(dim=-1)
-                predictions_intermediate_logits.detach()
-                # 2b. Translate back from the intermediate language representation to source language
-                pred_logits, last_dec_padding_mask = self.generate_forward_pass_logits(predictions_intermediate_tokenised.detach(), dec_padding_mask, this_batch_size)
+                # Compute loss in key-intermediate direction
+                pred_intermediate_logits, _ = self.generate_batch_logits(input_tokens, src_padding_mask, this_batch_size)
+                loss = loss_fn(pred_intermediate_logits.view(-1, pred_intermediate_logits.size(-1)), intermediate_tokenised.view(-1))
+                pred_intermediate_logits.detach()
 
+                # TODO: Experiment with non-accumulated loss
+                # Compute loss in intermediate-key direction
+                pred_tgt_logits, _ = self.generate_batch_logits(intermediate_tokenised, inter_padding_mask, this_batch_size)
+                loss += loss_fn(pred_tgt_logits.view(-1, pred_tgt_logits.size(-1)), input_tokens.view(-1)) # accumulate loss instead of overwriting
+                pred_tgt_logits.detach() 
+                
+                
+                # if epoch == 0 or epoch == num_epochs - 1 or epoch % 5 == 0
                 # Cool down the CPU and GPU! (Not essential, but I like having a functioning laptop)
                 time.sleep(2.)
-
-                # Clear unneeded tensors
 
                 if training:
                     optimizer.zero_grad()
 
                 # Compute loss by resizing (batch_size, seq_len, vocab_size) to (batch_size * seq_len, vocab_size)
                 # Resize input tokens from (batch_size, seq_len) to (batch_size * seq_len)
-                loss = loss_fn(pred_logits.view(-1, pred_logits.size(-1)), input_tokens.view(-1))
+                # loss = loss_fn(pred_logits.view(-1, pred_logits.size(-1)), input_tokens.view(-1))
                 print(f"Loss: {loss}\n")
                 epoch_loss += loss.item() * this_batch_size
-                pred_logits.detach()
+                # pred_logits.detach()
 
                 if training:
                     # print(f"Loss compute directly: {direct_loss}\n")
                     loss.backward()
                     optimizer.step()
-
+                
                 loss.detach()
                 
                 # Cool down the CPU and GPU!
