@@ -15,7 +15,7 @@ from fairseq2.generation.text import TextTranslator
 from fairseq2.data.cstring import CString
 from fairseq2.data.typing import StringLike
 from fairseq2.data.text import read_text
-
+from curriculum import Curriculum
 
 class Backtranslator():
 
