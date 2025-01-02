@@ -152,25 +152,25 @@ class Backtranslator():
     
     # TODO: Implement training with curriculum approach
     # TODO: Move common arguments to class data members in __init__
-    def train_multiple_languages(self, sentences: List[str], key_lang: str, curriculum : Curriculum, training: bool, num_epochs : int = 1, lr : float = 0.005, batch_size : int = 5, validation_sentences : List[str], save_model_name : str = None) -> Information
-    """
-    Train using back translation on multiple languages simultaneously. Use the given curriculum to split learning based on 
-    a curriculum strategy.
-    :param sentences: list of sentences in the key language
-    :param key_lang: the key language - i.e. language of input data used for data augmentation
-    :param curriculum: the training approach for the multiple input languages, specifying list of intermediate languages as well as training curriculum
-    :param training: boolean flag to indicate if model is in training mode
-        - turned off for testing/validation/computing individual loss without gradient update
-    :param num_epochs (default = 5)
-    :param lr: learning rate (default = 0.005)
-    :param batch_size (default = 5)
-    :param validation_sentences: list of sentences for checking validation loss
-    :param save_model_name: name of the model to save after training (excluding ".pth" suffix). If no
-            name is provided, the model is not saved
+    def train_multiple_languages(self, sentences: List[str], key_lang: str, curriculum : Curriculum, training: bool, num_epochs : int = 1, lr : float = 0.005, batch_size : int = 5, validation_sentences : List[str] = None, save_model_name : str = None) -> Information:
+        """
+        Train using back translation on multiple languages simultaneously. Use the given curriculum to split learning based on 
+        a curriculum strategy.
+        :param sentences: list of sentences in the key language
+        :param key_lang: the key language - i.e. language of input data used for data augmentation
+        :param curriculum: the training approach for the multiple input languages, specifying list of intermediate languages as well as training curriculum
+        :param training: boolean flag to indicate if model is in training mode
+            - turned off for testing/validation/computing individual loss without gradient update
+        :param num_epochs (default = 5)
+        :param lr: learning rate (default = 0.005)
+        :param batch_size (default = 5)
+        :param validation_sentences: list of sentences for checking validation loss
+        :param save_model_name: name of the model to save after training (excluding ".pth" suffix). If no
+                name is provided, the model is not saved
 
-    :return: Information object containing training, validation losses and time per epoch 
-    """
-    pass
+        :return: Information object containing training, validation losses and time per epoch 
+        """
+        pass
 
     # TODO: Abstract function for arbitrary backtranslation depth
     # TODO: Create tests for backtranslation
